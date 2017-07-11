@@ -39,7 +39,6 @@ public class JpaDataFetcher implements DataFetcher {
         field.getSelectionSet().getSelections().forEach(selection -> {
             if (selection instanceof Field) {
                 Field selectedField = (Field) selection;
-
                 // "__typename" is part of the graphql introspection spec and has to be ignored by jpa
                 if(!"__typename".equals(selectedField.getName())) {
 

@@ -1,79 +1,53 @@
 package org.crygier.graphql;
 
 import graphql.Scalars;
-import graphql.schema.GraphQLArgument;
-import graphql.schema.GraphQLEnumType;
-import graphql.schema.GraphQLFieldDefinition;
-import graphql.schema.GraphQLInputObjectField;
-import graphql.schema.GraphQLInputObjectType;
-import graphql.schema.GraphQLInputType;
-import graphql.schema.GraphQLList;
-import graphql.schema.GraphQLObjectType;
-import graphql.schema.GraphQLOutputType;
-import graphql.schema.GraphQLSchema;
-import graphql.schema.GraphQLType;
-import graphql.schema.GraphQLTypeReference;
-import org.crygier.graphql.annotation.GraphQLIgnore;
+import graphql.schema.*;
 import org.crygier.graphql.annotation.SchemaDocumentation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Resource;
 import javax.persistence.EntityManager;
-import javax.persistence.metamodel.Attribute;
-import javax.persistence.metamodel.EntityType;
-import javax.persistence.metamodel.PluralAttribute;
-import javax.persistence.metamodel.SingularAttribute;
-import javax.persistence.metamodel.Type;
+import javax.persistence.metamodel.*;
 import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Field;
 import java.lang.reflect.Member;
-import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Date;
 import java.util.List;
-import java.util.UUID;
-import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-public class GraphQLSchemaBuilder {
-
+public class JpaGraphQLQueryProvider implements GraphQLQueryProvider {
 
     public static final String PAGINATION_REQUEST_PARAM_NAME = "paginationRequest";
-    private static final Logger log = LoggerFactory.getLogger(GraphQLSchemaBuilder.class);
+    private static final Logger log = LoggerFactory.getLogger(JpaGraphQLQueryProvider.class);
 
+    @Resource
     private EntityManager entityManager;
-    private BiConsumer<GraphQLSchema.Builder, EntityManager> schemaEnhancer;
 
-    public GraphQLSchemaBuilder(EntityManager entityManager) {
+    protected JpaGraphQLQueryProvider(){
+    }
+
+    public JpaGraphQLQueryProvider(EntityManager entityManager) {
         this.entityManager = entityManager;
     }
 
-    public GraphQLSchemaBuilder(EntityManager entityManager, BiConsumer<GraphQLSchema.Builder, EntityManager> schemaEnhancer) {
-        this.entityManager = entityManager;
-        this.schemaEnhancer = schemaEnhancer;
-    }
-
-    public GraphQLSchema getGraphQLSchema() {
-        GraphQLSchema.Builder schemaBuilder = GraphQLSchema.newSchema();
-        schemaBuilder.query(getQueryType());
-
-        if(schemaEnhancer != null) {
-            schemaEnhancer.accept(schemaBuilder, entityManager);
-        }
-
-        return schemaBuilder.build();
-    }
-
-    private GraphQLObjectType getQueryType() {
+    @Override
+    public GraphQLObjectType getQuery() {
         GraphQLObjectType.Builder queryType = GraphQLObjectType.newObject().name("QueryType_JPA").description("All encompassing schema for this JPA environment");
-        queryType.fields(entityManager.getMetamodel().getEntities().stream().filter(this::isNotIgnored).map(this::getQueryFieldDefinition).collect(Collectors.toList()));
-        queryType.fields(entityManager.getMetamodel().getEntities().stream().filter(this::isNotIgnored).map(this::getQueryFieldPageableDefinition).collect(Collectors.toList()));
+        queryType.fields(entityManager.getMetamodel().getEntities().stream().map(this::getQueryFieldDefinition).collect(Collectors.toList()));
+        queryType.fields(entityManager.getMetamodel().getEntities().stream().map(this::getQueryFieldPageableDefinition).collect(Collectors.toList()));
 
         return queryType.build();
+    }
+
+    @Override
+    public Object context() {
+        return null;
     }
 
     private GraphQLFieldDefinition getQueryFieldDefinition(EntityType<?> entityType) {
@@ -82,7 +56,7 @@ public class GraphQLSchemaBuilder {
                 .description(getSchemaDocumentation( entityType.getJavaType()))
                 .type(new GraphQLList(getObjectType(entityType)))
                 .dataFetcher(new JpaDataFetcher(entityManager, entityType))
-                .argument(entityType.getAttributes().stream().filter(this::isValidInput).filter(this::isNotIgnored).map(this::getArgument).collect(Collectors.toList()))
+                .argument(entityType.getAttributes().stream().filter(this::isValidInput).map(this::getArgument).collect(Collectors.toList()))
                 .build();
     }
 
@@ -161,8 +135,6 @@ public class GraphQLSchemaBuilder {
         if (attribute.getPersistentAttributeType() == Attribute.PersistentAttributeType.BASIC) {
             if (String.class.isAssignableFrom(attribute.getJavaType()))
                 return Scalars.GraphQLString;
-            else if (UUID.class.isAssignableFrom(attribute.getJavaType()))
-                return JavaScalars.GraphQLUUID;
             else if (Integer.class.isAssignableFrom(attribute.getJavaType()) || int.class.isAssignableFrom(attribute.getJavaType()))
                 return Scalars.GraphQLInt;
             else if (Short.class.isAssignableFrom(attribute.getJavaType()) || short.class.isAssignableFrom(attribute.getJavaType()))
@@ -182,8 +154,6 @@ public class GraphQLSchemaBuilder {
                 return JavaScalars.GraphQLLocalDate;
             else if (attribute.getJavaType().isEnum()) {
                 return getTypeFromJavaType(attribute.getJavaType());
-            } else if (BigDecimal.class.isAssignableFrom(attribute.getJavaType())) {
-                return Scalars.GraphQLBigDecimal;
             }
         } else if (attribute.getPersistentAttributeType() == Attribute.PersistentAttributeType.ONE_TO_MANY || attribute.getPersistentAttributeType() == Attribute.PersistentAttributeType.MANY_TO_MANY) {
             EntityType foreignType = (EntityType) ((PluralAttribute) attribute).getElementType();
@@ -223,27 +193,6 @@ public class GraphQLSchemaBuilder {
         }
 
         return null;
-    }
-
-    private boolean isNotIgnored(Attribute attribute) {
-        return isNotIgnored(attribute.getJavaMember()) && isNotIgnored(attribute.getJavaType());
-    }
-
-    private boolean isNotIgnored(EntityType entityType) {
-        return isNotIgnored(entityType.getJavaType());
-    }
-
-    private boolean isNotIgnored(Member member) {
-        return member instanceof AnnotatedElement && isNotIgnored((AnnotatedElement) member);
-    }
-
-    private boolean isNotIgnored(AnnotatedElement annotatedElement) {
-        if (annotatedElement != null) {
-            GraphQLIgnore schemaDocumentation = annotatedElement.getAnnotation(GraphQLIgnore.class);
-            return schemaDocumentation == null;
-        }
-
-        return false;
     }
 
     private GraphQLType getTypeFromJavaType(Class clazz) {

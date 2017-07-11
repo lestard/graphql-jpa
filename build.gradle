@@ -63,9 +63,9 @@ model {
         destination = file("$buildDir/libs/${project.name}-${version}.pom")
     }
 
-	tasks.assemble {
-		dependsOn tasks.generatePomFileForMyPublicationPublication
-	}
+//	tasks.assemble {
+//		dependsOn tasks.generatePomFileForMyPublicationPublication
+//	}
 }
 
 task sourcesJar(type: Jar, dependsOn: classes) {
